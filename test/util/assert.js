@@ -2,6 +2,7 @@
 
 const _assert = require('assert');
 const util = require('util');
+const {BufferMap} = require('buffer-map');
 
 const assert = function assert(value, message) {
   if (!value) {
@@ -104,6 +105,29 @@ assert.notBufferEqual = function notBufferEqual(actual, expected, message) {
       operator: '!==',
       stackStartFunction: notBufferEqual
     });
+  }
+};
+
+assert.bufferMapEqual = function bufferMapEqual(actual, expected, message) {
+  assert(actual instanceof BufferMap, '`actual` must be a BufferMap.');
+  assert(expected instanceof BufferMap, '`expected` must be a BufferMap.');
+  assert(actual.size === expected.size, 'two BufferMaps have different length');
+
+  const asorted = [];
+  for (const kv of actual) {
+    kv.sort();
+    asorted.push(kv);
+  }
+  const esorted = [];
+  for (const kv of expected) {
+    kv.sort();
+    esorted.push(kv);
+  }
+  asorted.sort();
+  esorted.sort();
+  for (const i in asorted) {
+    assert.bufferEqual(asorted[i][0], esorted[i][0], message);
+    assert.bufferEqual(asorted[i][1], esorted[i][1], message);
   }
 };
 
