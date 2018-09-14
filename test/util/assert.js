@@ -108,10 +108,11 @@ assert.notBufferEqual = function notBufferEqual(actual, expected, message) {
   }
 };
 
-assert.bufferMapEqual = function bufferMapEqual(actual, expected, message) {
+assert.bufferMapEqual = function bufferMapEqual(actual, expected, valueCmp, message) {
   assert(actual instanceof BufferMap, '`actual` must be a BufferMap.');
   assert(expected instanceof BufferMap, '`expected` must be a BufferMap.');
-  assert(actual.size === expected.size, 'two BufferMaps have different length');
+  assert(actual.size === expected.size, 'two BufferMaps have different size');
+  valueCmp = valueCmp || assert.bufferEqual;
 
   const asorted = [];
   for (const kv of actual) {
@@ -127,7 +128,7 @@ assert.bufferMapEqual = function bufferMapEqual(actual, expected, message) {
   esorted.sort();
   for (const i in asorted) {
     assert.bufferEqual(asorted[i][0], esorted[i][0], message);
-    assert.bufferEqual(asorted[i][1], esorted[i][1], message);
+    valueCmp(asorted[i][1], esorted[i][1], message);
   }
 };
 

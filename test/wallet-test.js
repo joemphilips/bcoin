@@ -1545,6 +1545,12 @@ describe('Wallet', function() {
     assert(!await wdb.get('alice100'));
   });
 
+  it('should create and fill PSBT', async () => {
+    const wallet = wdb.create();
+    const walletW = wdb.create({ witness: true });
+    const psbt = wallet.createPSBT();
+  });
+
   const keyTypes = [
     {
       name: 'receive',
