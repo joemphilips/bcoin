@@ -1,11 +1,11 @@
 /* eslint-env mocha */
 'use strict';
 
-const assert = require('./util/assert');
 const PSBT = require('../lib/primitives/psbt');
 const KeyRing = require('../lib/primitives/keyring');
 const Outpoint = require('../lib/primitives/outpoint');
 const Coin = require('../lib/primitives/coin');
+const CoinView = require('../lib/coins/coinview');
 const Script = require('../lib/script/script');
 const common = require('../lib/script/common');
 const HDPrivateKey = require('../lib/hd/private');
@@ -13,14 +13,23 @@ const KeyOriginInfo = require('../lib/hd/keyorigin');
 const Amount = require('../lib/btc/amount');
 const MTX = require('../lib/primitives/mtx');
 const TX = require('../lib/primitives/tx');
+
 const data = require('./data/psbt.json');
-const WalletDB = require('../lib/wallet/walletdb');
-const WorkerPool = require('../lib/workers/workerpool');
+
 const util = require('../lib/utils/util');
 const hash160 = require('bcrypto/lib/hash160');
+const assert = require('./util/assert');
+
+const WalletDB = require('../lib/wallet/walletdb');
+const WorkerPool = require('../lib/workers/workerpool');
+const Chain = require('../lib/blockchain/chain');
 
 const workers = new WorkerPool({ enabled: true });
 const wdb = new WalletDB({ workers });
+const chain = new Chain({
+  memory: true,
+  workers
+});
 
 function assertPSBTEqual(actual, expected) {
   assert.bufferEqual(
@@ -152,7 +161,7 @@ function templateTX(ring, type, numSign, m, n) {
     }
   }
 
-  return [keys[0], ringOutput, mtx, cb];
+  return [keys[0], ringOutput, mtx, cb, keys];
 }
 
 function commonAssertion(psbt) {
@@ -267,58 +276,60 @@ describe('Partially Signed Bitcoin Transaction', () => {
   }
   });
 
+  /*
   describe('Updater', () => {
-    for (const numSign of [0, 1, 2]) {
-      for (const type of ['p2wsh', 'p2sh-p2wsh']) {
-    it(`should update [in|out]put script for ${type}`, () => {
-      const [ring, , mtx] = templateTX(KeyRing.generate(), type, 0, 2, 2);
-      const [tx, view] = mtx.commit();
-      const psbt = PSBT.fromTX(tx, view);
-      commonAssertion(psbt);
-      assert.strictEqual(psbt.inputs[0].redeem.code.length, 4);
-      assert(ring.script.equals(psbt.inputs[0].redeem));
+    before(async () => {
+      await chain.open();
     });
-
-    /*
-    it('should update [in|out]put script for p2wsh', () => {
-      const [ring, , mtx, cb] = templateTX(KeyRing.generate(), 'p2wsh', true);
-      const [tx, view] = mtx.commit();
-      const psbt = PSBT.fromTX(tx, view);
-      psbt.inputs[0].witnessUTXO = cb.outputs[0];
-      psbt.scriptInput(0, ring);
-      assert(ring.script.equals(psbt.inputs[0].witness));
+    after(async () => {
+      await chain.close();
     });
-
-    it('should update [in|out]put script for p2sh-p2wsh', () => {
-      const [ring, , mtx, cb] = templateTX(KeyRing.generate(), 'p2sh-p2wsh', true);
-      const [tx, view] = mtx.commit();
-      const psbt = PSBT.fromTX(tx, view);
-      psbt.inputs[0].nonWitnessUTXO = cb;
-      psbt.scriptInput(0, ring);
-      assert(ring.script.equals(psbt.inputs[0].witness.getRedeem()));
-      assert(psbt.inputs[0].redeem.isProgram());
-    });
-    */
-      }
+    for (const type of ['p2wsh', 'p2sh-p2wsh']) {
+      it(`should update for ${type}`, async () => {
+        const [ring, , mtx, cb] = templateTX(KeyRing.generate(), type, 0, 2, 2);
+        const tx = mtx.toTX();
+        const psbt = PSBT.fromTX(tx, new CoinView());
+        commonAssertion(psbt);
+        await chain.fillPSBT(psbt);
+        assert.strictEqual(psbt.inputs[0].redeem.code.length, 4);
+        assert(ring.script.equals(psbt.inputs[0].redeem));
+      });
     }
   });
+  */
 
   describe('Signer', () => {
-    it('should sign input for p2pkh', () => {
-      const [ring, , mtx, cb] = templateTX(KeyRing.generate(), 'p2pkh', false);
-      const [tx, view] = mtx.commit();
-      const psbt = PSBT.fromTX(tx, view);
-      assert.strictEqual(psbt.inputs[0].signatures.size, 0);
-      psbt.sign(ring);
-      assert.strictEqual(psbt.inputs[0].signatures.size, 1, 'not signed');
-      assert(psbt.inputs[0].signatures.has(ring.publicKey));
-    });
-
-    it('should sign input for p2sh', () => {});
-
-    it('should sign input for p2wsh', () => {});
-
-    it('should sign input for p2sh-nested-p2wsh', () => {});
+    const t = ['p2pkh', 'p2sh', 'p2wsh', 'p2wpkh','p2sh-p2wsh', 'p2sh-p2wpkh'];
+    for (const type of t) {
+      for (const sighash of Object.keys(common.hashTypeByVal)) {
+        const val = common.hashTypeByVal[sighash];
+        it(`should sign input for ${type} with sighash ${val}`, () => {
+          const [ring,,mtx, cb] = templateTX(KeyRing.generate(), type, 0, 2, 2);
+          const psbt = PSBT.fromMTX(mtx);
+          assert.strictEqual(psbt.inputs[0].signatures.size, 0);
+          psbt.inputs[0].nonWitnessUTXO = cb.toTX();
+          psbt.inputs[0].sighash = parseInt(sighash);
+          psbt.signInput(0, ring);
+          assert.strictEqual(psbt.inputs[0].signatures.size, 1);
+          const sig = psbt.inputs[0].signatures.get(ring.publicKey);
+          assert(sig);
+          let prev = cb.outputs[0].script;
+          let v = 0;
+          if (type === 'p2sh' || type === 'p2sh-p2wpkh')
+            prev = psbt.inputs[0].redeem;
+          if (type === 'p2wsh' || type === 'p2sh-p2wsh')
+            prev = psbt.inputs[0].witness;
+          if (type.endsWith('p2wsh') || type.endsWith('p2wpkh'))
+            v = 1;
+          const dummy = mtx.toTX().clone();
+          const value = cb.outputs[0].value;
+          assert(
+            dummy.checksig(0, prev, value, sig, ring.publicKey, v),
+            'malformed signature'
+          );
+        });
+      }
+    }
   });
 
   describe('Combiner', () => {
@@ -328,7 +339,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
   describe('Finalizer', () => {});
   describe('TX Extractor', () => {});
 
-  it('should pass the last test in BIP174', () => {
+  it('should pass the longest test in BIP174', () => {
    /* eslint-disable */
    const d = data.final;
     const master = HDPrivateKey.fromBase58(d.master, 'testnet');
