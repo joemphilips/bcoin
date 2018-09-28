@@ -5,7 +5,6 @@ const PSBT = require('../lib/primitives/psbt');
 const KeyRing = require('../lib/primitives/keyring');
 const Outpoint = require('../lib/primitives/outpoint');
 const Coin = require('../lib/primitives/coin');
-const CoinView = require('../lib/coins/coinview');
 const Script = require('../lib/script/script');
 const common = require('../lib/script/common');
 const HDPrivateKey = require('../lib/hd/private');
@@ -20,12 +19,10 @@ const util = require('../lib/utils/util');
 const hash160 = require('bcrypto/lib/hash160');
 const assert = require('./util/assert');
 
-const WalletDB = require('../lib/wallet/walletdb');
 const WorkerPool = require('../lib/workers/workerpool');
 const Chain = require('../lib/blockchain/chain');
 
 const workers = new WorkerPool({ enabled: true });
-const wdb = new WalletDB({ workers });
 const chain = new Chain({
   memory: true,
   workers
@@ -118,7 +115,7 @@ function assertFinalized(psbt, tx, witness) {
  * @param {String} type - type of input. e.g. "p2wsh", "p2sh-p2wpkh".
  */
 
-function templateTX(ring, type, numSign, m, n) {
+function templateTX(ring, type, numSign, m, n, ringOutput) {
   ring.witness = type.endsWith('p2wpkh') || type.endsWith('p2wsh');
   ring.nested = type === 'p2sh-p2wsh' || type === 'p2sh-p2wpkh';
   n = n <= 1 ? 1 : n;
@@ -151,7 +148,7 @@ function templateTX(ring, type, numSign, m, n) {
   const mtx = new MTX({version: 1});
   mtx.addTX(cb, 0);
   mtx.scriptInput(0, coin, ring);
-  const ringOutput = KeyRing.generate();
+  ringOutput = ringOutput || KeyRing.generate();
   const outValue = Amount.fromBTC('0.08').toValue();
   mtx.addOutput(ringOutput.getAddress(), outValue);
 
@@ -221,10 +218,11 @@ describe('Partially Signed Bitcoin Transaction', () => {
 
   describe('Creator', () => {
     for (const sign of [true, false]) {
-      const caseSigned = sign ? 'signed' : 'unsigned';
-      it(`should instantiate from tx with ${caseSigned} p2wpkh input`, () => {
+      const suffix = sign ? 'signed' : 'unsigned';
+      it(`should instantiate from tx with ${suffix} p2wpkh input`, () => {
         const numSign = sign ? 1 : 0;
-        const [, ringOut, mtx] = templateTX(KeyRing.generate(), 'p2wpkh', numSign, 1, 1);
+        const r = KeyRing.generate();
+        const [, ringOut, mtx] = templateTX(r, 'p2wpkh', numSign, 1, 1);
 
         const [tx, view] = mtx.commit();
         const psbt = PSBT.fromTX(tx, view);
@@ -333,10 +331,38 @@ describe('Partially Signed Bitcoin Transaction', () => {
   });
 
   describe('Combiner', () => {
-    it('should merge', () => {});
+    it('should merge the psbt with the same txid', () => {
+    });
+    it('should merge the psbt with a different txid', () => {});
   });
 
-  describe('Finalizer', () => {});
+  describe('Finalizer', () => {
+    for (const type of ['p2sh', 'p2wsh', 'p2sh-p2wsh']) {
+      it(`should finalize fully signed ${type} multisig`, () => {
+        const [, , mtx] = templateTX(KeyRing.generate(),type , 2, 2, 2);
+        const psbt = PSBT.fromMTX(mtx);
+        psbt.finalize();
+        assert(psbt.inputs.every(i => i.witness.code.length === 0));
+        assert(psbt.inputs.every(i => i.redeem.code.length === 0));
+        assert(psbt.inputs.every(i => i.signatures.size === 0));
+        if (type === 'p2sh')
+          assert(psbt.inputs[0].finalScriptSig.isScripthashInput());
+        if (type.endsWith('p2wsh'))
+          assert(psbt.inputs[0].finalScriptWitness.isScripthashInput());
+      });
+      it(`should fail to finalize partially signed ${type} multisig`, () => {
+        const [, , mtx] = templateTX(KeyRing.generate(),type , 1, 2, 2);
+        const psbt = PSBT.fromMTX(mtx);
+        let err;
+        try {
+          psbt.finalize();
+        } catch (e) {
+          err = e;
+        }
+        assert.typeOf(err, 'error');
+      });
+    }
+  });
   describe('TX Extractor', () => {});
 
   it('should pass the longest test in BIP174', () => {
@@ -418,16 +444,16 @@ describe('Partially Signed Bitcoin Transaction', () => {
     
     // change sighash
     for (const i in psbt.inputs) {
-      psbt.inputs[i].sighash = 0;
+      psbt.inputs[i].sighash = 1;
     }
     expected = PSBT.fromRaw(d.psbt3, 'base64');
     assertPSBTEqual(psbt, expected);
 
     // signer1
-    const privkey7 = KeyRing.fromPrivate(Buffer.from(d.key7, 'hex'));
-    const privkey8 = KeyRing.fromPrivate(Buffer.from(d.key8, 'hex'));
+    const privkey7 = KeyRing.fromSecret(d.key7.wif);
+    const privkey8 = KeyRing.fromSecret(d.key8.wif);
     psbt.sign([privkey7, privkey8]);
-    expected = PSBT.fromRaw(d.psbt4);
+    expected = PSBT.fromRaw(d.psbt4, "base64");
     assertPSBTEqual(psbt, expected);
 
     // signer2
@@ -440,13 +466,13 @@ describe('Partially Signed Bitcoin Transaction', () => {
     // combiner
     const psbtCombined1 = psbt.combine(psbttmp);
     const psbtCombined2 = psbttmp.combine(psbt);
-    expected = PSBT.fromRaw(d.psbtcombined, 'hex');
+    expected = PSBT.fromRaw(d.psbtcombined, 'base64');
     assertPSBTEqual(psbtCombined1, expected);
     assertPSBTEqual(psbtCombined2, expected);
 
     // finalizer
     const psbtFinalized = psbt.finalize();
-    expected = PSBT.fromRaw(d.psbtfinalized, 'hex');
+    expected = PSBT.fromRaw(d.psbtfinalized, 'base64');
     assertPSBTEqual(psbtFinalized, expected);
 
     // extractor
@@ -462,24 +488,5 @@ describe('Partially Signed Bitcoin Transaction', () => {
     const expected = PSBT.fromRaw(data.psbtUnknown3, 'base64');
     const combined = psbt1.combine(psbt2);
     assertPSBTEqual(combined, expected);
-  });
-
-  describe('Wallet', () => {
-    before(async () => {
-      await wdb.open();
-    });
-    after(async () => {
-      await wdb.close();
-    });
-
-    it('can fill psbt', async () => {
-      const wallet = await wdb.create();
-      const ringtmp = await wallet.createReceive();
-      const [, , mtx] = templateTX(ringtmp, 'p2wpkh', true);
-      const psbt = PSBT.fromMTX(mtx.clone());
-      wallet.fillPSBT(psbt);
-      // TODO: assert all inputs and outputs are all as expected.
-    });
-    it('can template path with wallet key', async () => {});
   });
 });
