@@ -115,23 +115,20 @@ function assertFinalized(psbt, tx, witness) {
  * @param {String} type - type of input. e.g. "p2wsh", "p2sh-p2wpkh".
  */
 
-function templateTX(ring, type, numSign, m, n, ringOutput) {
-  ring.witness = type.endsWith('p2wpkh') || type.endsWith('p2wsh');
-  ring.nested = type === 'p2sh-p2wsh' || type === 'p2sh-p2wpkh';
-  n = n <= 1 ? 1 : n;
-  m = m <= 1 ? 1 : m;
+function templateTX(type, numSign, m, n, ringOutput) {
   const keys = [];
-  for (let k = 0; k < n; k++) {
-    if (k === 0) {
-      keys.push(ring);
-      continue;
-    }
+  for (let i = 0; i < n; i++) {
     keys.push(KeyRing.generate());
+    keys[i].witness = type.endsWith('p2wpkh') || type.endsWith('p2wsh');
+    keys[i].nested = type === 'p2sh-p2wsh' || type === 'p2sh-p2wpkh';
+    n = n <= 1 ? 1 : n;
+    m = m <= 1 ? 1 : m;
   }
-  keys[0].script = type.endsWith('p2wsh') || type === 'p2sh' ?
-    Script.fromMultisig(m, n, keys.map(k => k.publicKey)) :
-    null;
-  ring.script = keys[0].script;
+  for (let i = 0; i < n; i++) {
+    keys[i].script = type.endsWith('p2wsh') || type === 'p2sh' ?
+      Script.fromMultisig(m, n, keys.map(k => k.publicKey)) :
+      null;
+  }
 
   const fundValue = Amount.fromBTC('0.1').toValue();
   const cb = new MTX();
@@ -140,14 +137,14 @@ function templateTX(ring, type, numSign, m, n, ringOutput) {
     script: new Script()
   });
   cb.addOutput({
-    address: ring.getAddress(),
+    address: keys[0].getAddress(),
     value: fundValue
   });
   const coin = Coin.fromTX(cb.toTX(), 0, -1);
 
-  const mtx = new MTX({version: 1});
+  const mtx = new MTX();
   mtx.addTX(cb, 0);
-  mtx.scriptInput(0, coin, ring);
+  mtx.scriptInput(0, coin, keys[0]);
   ringOutput = ringOutput || KeyRing.generate();
   const outValue = Amount.fromBTC('0.08').toValue();
   mtx.addOutput(ringOutput.getAddress(), outValue);
@@ -158,7 +155,7 @@ function templateTX(ring, type, numSign, m, n, ringOutput) {
     }
   }
 
-  return [keys[0], ringOutput, mtx, cb, keys];
+  return [keys, ringOutput, mtx, cb];
 }
 
 function commonAssertion(psbt) {
@@ -176,6 +173,25 @@ function commonAssertion(psbt) {
     psbt.inputs.length === psbt.tx.inputs.length &&
     psbt.outputs.length === psbt.tx.outputs.length,
     'psbt should have same number of [in|out]puts with global tx'
+  );
+}
+
+function checkSig(psbt, cb, publicKey, type) {
+  const sig = psbt.inputs[0].signatures.get(publicKey);
+  assert(sig);
+  let prev = cb.outputs[0].script;
+  let v = 0;
+  if (type === 'p2sh' || type === 'p2sh-p2wpkh')
+    prev = psbt.inputs[0].redeem;
+  if (type === 'p2wsh' || type === 'p2sh-p2wsh')
+    prev = psbt.inputs[0].witness;
+  if (type.endsWith('p2wsh') || type.endsWith('p2wpkh'))
+    v = 1;
+  const dummy = psbt.tx.clone();
+  const value = cb.outputs[0].value;
+  assert(
+    dummy.checksig(0, prev, value, sig, publicKey, v),
+    'malformed signature'
   );
 }
 
@@ -221,8 +237,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
       const suffix = sign ? 'signed' : 'unsigned';
       it(`should instantiate from tx with ${suffix} p2wpkh input`, () => {
         const numSign = sign ? 1 : 0;
-        const r = KeyRing.generate();
-        const [, ringOut, mtx] = templateTX(r, 'p2wpkh', numSign, 1, 1);
+        const [, ringOut, mtx] = templateTX('p2wpkh', numSign, 1, 1);
 
         const [tx, view] = mtx.commit();
         const psbt = PSBT.fromTX(tx, view);
@@ -246,8 +261,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
   for (const numSign of [0, 1, 2]) {
     for (const type of ['p2wsh', 'p2sh-p2wsh']) {
       it(`can create from tx with ${numSign} signed ${type} input`, () => {
-        const r = KeyRing.generate();
-        const [ring, , mtx] = templateTX(r, type, numSign, 2, 2);
+        const [rings, , mtx] = templateTX(type, numSign, 2, 2);
 
         const [tx, view] = mtx.commit();
         const psbt = PSBT.fromTX(tx, view);
@@ -256,7 +270,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
         const wit = psbt.inputs[0].witness;
         if (numSign === 0) {
           assert(
-            wit.equals(ring.script),
+            wit.equals(rings[0].script),
             'witness script for p2wsh must be copied to PSBTInput'
           );
         }
@@ -264,7 +278,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
           const witExpected = tx.inputs[0].witness;
           const [sigE] = witExpected.items
             .filter(i => common.isSignatureEncoding(i));
-          const sig = psbt.inputs[0].signatures.get(ring.publicKey);
+          const sig = psbt.inputs[0].signatures.get(rings[0].publicKey);
           assert.bufferEqual(sig, sigE, 'must preserve signature');
         }
         if (numSign === 2)
@@ -298,33 +312,26 @@ describe('Partially Signed Bitcoin Transaction', () => {
 
   describe('Signer', () => {
     const t = ['p2pkh', 'p2sh', 'p2wsh', 'p2wpkh','p2sh-p2wsh', 'p2sh-p2wpkh'];
+    const multisigType = ['p2sh', 'p2wsh', 'p2sh-p2wsh'];
     for (const type of t) {
       for (const sighash of Object.keys(common.hashTypeByVal)) {
         const val = common.hashTypeByVal[sighash];
         it(`should sign input for ${type} with sighash ${val}`, () => {
-          const [ring,,mtx, cb] = templateTX(KeyRing.generate(), type, 0, 2, 2);
+          const [rings, , mtx, cb] = templateTX(type, 0, 2, 2);
           const psbt = PSBT.fromMTX(mtx);
           assert.strictEqual(psbt.inputs[0].signatures.size, 0);
           psbt.inputs[0].nonWitnessUTXO = cb.toTX();
           psbt.inputs[0].sighash = parseInt(sighash);
-          psbt.signInput(0, ring);
+
+          psbt.signInput(0, rings[0]);
           assert.strictEqual(psbt.inputs[0].signatures.size, 1);
-          const sig = psbt.inputs[0].signatures.get(ring.publicKey);
-          assert(sig);
-          let prev = cb.outputs[0].script;
-          let v = 0;
-          if (type === 'p2sh' || type === 'p2sh-p2wpkh')
-            prev = psbt.inputs[0].redeem;
-          if (type === 'p2wsh' || type === 'p2sh-p2wsh')
-            prev = psbt.inputs[0].witness;
-          if (type.endsWith('p2wsh') || type.endsWith('p2wpkh'))
-            v = 1;
-          const dummy = mtx.toTX().clone();
-          const value = cb.outputs[0].value;
-          assert(
-            dummy.checksig(0, prev, value, sig, ring.publicKey, v),
-            'malformed signature'
-          );
+          checkSig(psbt, cb, rings[0].publicKey, type);
+
+          if (multisigType.findIndex(t => t !== -1)) {
+            psbt.signInput(0, rings[1]);
+            assert.strictEqual(psbt.inputs[0].signatures.size, 2);
+            checkSig(psbt, cb, rings[1].publicKey, type);
+          }
         });
       }
     }
@@ -336,12 +343,17 @@ describe('Partially Signed Bitcoin Transaction', () => {
     it('should merge the psbt with a different txid', () => {});
   });
 
-  describe('Finalizer', () => {
+  describe('Finalizer & TX Extractor', () => {
     for (const type of ['p2sh', 'p2wsh', 'p2sh-p2wsh']) {
       it(`should finalize fully signed ${type} multisig`, () => {
-        const [, , mtx] = templateTX(KeyRing.generate(),type , 2, 2, 2);
+        const [keys, , mtx, cb] = templateTX(type , 1, 2, 2);
         const psbt = PSBT.fromMTX(mtx);
+        psbt.inputs[0].nonWitnessUTXO = cb;
+        psbt.sign(keys);
+        assert(psbt.inputs[0].finalScriptSig === null);
+        assert(psbt.inputs[0].finalScriptWitness === null);
         psbt.finalize();
+
         assert(psbt.inputs.every(i => i.witness.code.length === 0));
         assert(psbt.inputs.every(i => i.redeem.code.length === 0));
         assert(psbt.inputs.every(i => i.signatures.size === 0));
@@ -349,9 +361,16 @@ describe('Partially Signed Bitcoin Transaction', () => {
           assert(psbt.inputs[0].finalScriptSig.isScripthashInput());
         if (type.endsWith('p2wsh'))
           assert(psbt.inputs[0].finalScriptWitness.isScripthashInput());
+
+        // TX Extractor
+        const tx = psbt.toTX();
+        assert(tx.verify(mtx.view));
+        const coin = mtx.view.getOutput(tx.inputs[0].prevout);
+        tx.checkInput(0, coin);
       });
+
       it(`should fail to finalize partially signed ${type} multisig`, () => {
-        const [, , mtx] = templateTX(KeyRing.generate(),type , 1, 2, 2);
+        const [, , mtx] = templateTX(type , 1, 2, 2);
         const psbt = PSBT.fromMTX(mtx);
         let err;
         try {
@@ -363,7 +382,6 @@ describe('Partially Signed Bitcoin Transaction', () => {
       });
     }
   });
-  describe('TX Extractor', () => {});
 
   it('should pass the longest test in BIP174', () => {
    /* eslint-disable */
