@@ -71,10 +71,11 @@ function assertPSBTEqual(actual, expected) {
     }
 
     if (e.finalScriptWitness) {
-      assert(
-        e.finalScriptWitness.equals(a.finalScriptWitness),
-      'finalScriptSig must be same'
-      );
+      for (let i = 0; i < e.finalScriptWitness.items.length;i++) {
+        const itemE = e.finalScriptWitness.items[i];
+        const itemA = a.finalScriptWitness.items[i];
+        assert.bufferEqual(itemE, itemA);
+      }
     }
   };
 
@@ -206,7 +207,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
       } catch (e) {
         err = e;
       }
-      assert.typeOf(err, 'error', `result was ${result}`);
+      assert.typeOf(err, 'error', result);
     });
   }
 
@@ -430,23 +431,20 @@ describe('Partially Signed Bitcoin Transaction', () => {
       const hd = master.derivePath(path);
       assert.bufferEqual(rings[i].publicKey, hd.publicKey);
       
-      // usually `PSBT.template` depends on `WalletKey` for setting bip32 path.
-      // since bip44 style is the only path the wallet utilizes.
+      // usually `PSBT.update` depends on `WalletKey` for setting bip32 path.
+      // since bip44 style is the only path the wallet copes with.
       // So this time we are going to set KeyOriginInfo manually to mimic the
       // wallet for this test.
       const fp = hash160.digest(master.publicKey);
       const fingerPrint = fp.readUInt32BE(0, true);
       keyInfos.push([hd.publicKey, KeyOriginInfo.fromOptions({fingerPrint, path})]);
     }
-    rings[0].script = redeem1;
-    rings[1].script = redeem1;
-    rings[2].script = witness1;
-    rings[3].script = witness1;
-    rings[2].witness = true;
-    rings[3].witness = true;
 
     psbt.inputs[0].nonWitnessUTXO = prevtx2;
     psbt.inputs[1].witnessUTXO = prevtx1.outputs[1];
+    psbt.inputs[0].redeem = redeem1;
+    psbt.inputs[1].redeem = redeem2; // witness program
+    psbt.inputs[1].witness = witness1;
     psbt.update(rings);
     // set dummies
     psbt.inputs[0].keyInfo.set(keyInfos[0][0], keyInfos[0][1]);
@@ -458,7 +456,6 @@ describe('Partially Signed Bitcoin Transaction', () => {
 
     expected = PSBT.fromRaw(d.psbt2, 'base64');
     assertPSBTEqual(psbt, expected);
-    const psbttmp = psbt.clone(); // for second signer
     
     // change sighash
     for (const i in psbt.inputs) {
@@ -467,17 +464,20 @@ describe('Partially Signed Bitcoin Transaction', () => {
     expected = PSBT.fromRaw(d.psbt3, 'base64');
     assertPSBTEqual(psbt, expected);
 
+    const psbttmp = psbt.clone(); // for second signer
+
     // signer1
     const privkey7 = KeyRing.fromSecret(d.key7.wif);
     const privkey8 = KeyRing.fromSecret(d.key8.wif);
+    // psbt.update([privkey7, privkey8]);
     psbt.sign([privkey7, privkey8]);
-    expected = PSBT.fromRaw(d.psbt4, "base64");
+    expected = PSBT.fromRaw(d.psbt4, 'base64');
     assertPSBTEqual(psbt, expected);
 
     // signer2
-    const privkey9 = KeyRing.fromPrivate(Buffer.from(d.key9, 'hex'));
-    const privkey10 = KeyRing.fromPrivate(Buffer.from(d.key10, 'hex'));
-    expected = PSBT.fromRaw(d.psbt5);
+    const privkey9 = KeyRing.fromSecret(d.key9.wif);
+    const privkey10 = KeyRing.fromSecret(d.key10.wif);
+    expected = PSBT.fromRaw(d.psbt5, 'base64');
     psbttmp.sign([privkey9, privkey10]);
     assertPSBTEqual(psbttmp, expected);
 
@@ -489,14 +489,15 @@ describe('Partially Signed Bitcoin Transaction', () => {
     assertPSBTEqual(psbtCombined2, expected);
 
     // finalizer
-    const psbtFinalized = psbt.finalize();
+    psbt.finalize();
     expected = PSBT.fromRaw(d.psbtfinalized, 'base64');
-    assertPSBTEqual(psbtFinalized, expected);
+    assertPSBTEqual(psbt, expected);
 
     // extractor
-    const tx = psbtFinalized.toTX();
-    expeted = TX.fromRaw(d.extracted, 'hex');
-    // TODO: assert tx equality.
+    const tx = psbt.toTX();
+    expected = TX.fromRaw(d.txextracted, 'hex');
+    assert.strictEqual(tx.txid(), expected.txid());
+    assert.strictEqual(tx.wtxid(), expected.wtxid());
    /* eslint-enable */
   });
 

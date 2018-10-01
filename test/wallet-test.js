@@ -1627,6 +1627,8 @@ describe('Wallet', function() {
     }
     assert.strictEqual(psbt.inputs[4].signatures.size, 1);
     psbt.finalize();
+    const tx = psbt.toTX();
+    assert(tx.isSane());
   });
 
   it('should remove a wallet', async () => {
