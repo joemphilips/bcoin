@@ -1578,7 +1578,8 @@ describe('Wallet', function() {
     // fundTx has 5 inputs (4 from multisig and 1 from carol)
     // and 3 outputs (1 for recipient, 1 for carol and 1 for multisig)
     // with this order.
-    const psbt = PSBT.fromMTX(fundTX);
+    const [ftx, view] = fundTX.commit();
+    const psbt = PSBT.fromTX(ftx, view);
     const psbtBob = psbt.clone();
 
     // 1. multisig payer 1 fills psbt.
@@ -1628,7 +1629,7 @@ describe('Wallet', function() {
     assert.strictEqual(psbt.inputs[4].signatures.size, 1);
     psbt.finalize();
     const tx = psbt.toTX();
-    assert(tx.isSane());
+    assert(tx.verify(view));
   });
 
   it('should remove a wallet', async () => {
