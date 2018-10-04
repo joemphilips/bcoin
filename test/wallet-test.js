@@ -1543,7 +1543,7 @@ describe('Wallet', function() {
       type: 'multisig',
       m: 2,
       n: 2
-    }
+    };
     const alice = await wdb.create(options); // multisig payer 1
     const bob = await wdb.create(options); // multisig payer 2
     await alice.addSharedKey(0, await bob.accountKey(0));
