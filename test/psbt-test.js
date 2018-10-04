@@ -188,6 +188,8 @@ function checkSig(psbt, cb, publicKey, type) {
     prev = psbt.inputs[0].witness;
   if (type.endsWith('p2wsh') || type.endsWith('p2wpkh'))
     v = 1;
+  if (type.endsWith('p2wpkh'))
+    prev = Script.fromPubkeyhash(prev.getWitnessPubkeyhash());
   const dummy = psbt.tx.clone();
   const value = cb.outputs[0].value;
   assert(
@@ -381,6 +383,34 @@ describe('Partially Signed Bitcoin Transaction', () => {
         }
         assert.typeOf(err, 'error');
       });
+
+      for (const type2 of ['p2pkh', 'p2wpkh', 'p2sh-p2wpkh']) {
+        it (`should finalize psbt with 1. ${type} and 2. ${type2}`, () => {
+          const [keys, , mtx, cb] = templateTX(type, 0, 2, 2);
+          const ring = KeyRing.generate();
+          ring.witness = type2.endsWith('p2wpkh');
+          ring.nested = type2.startsWith('p2sh');
+          ring.refresh();
+          const cb2 = new MTX();
+          cb2.addInput({
+            prevout: new Outpoint(),
+            script: new Script()
+          });
+          cb2.addOutput({address: ring.getAddress(), value: 100});
+          mtx.addTX(cb2, 0);
+          mtx.scriptInput(0, cb.outputs[0], keys);
+          mtx.scriptInput(1, cb2.outputs[0], ring);
+          mtx.sign(keys);
+          const [tx, view] = mtx.commit();
+          const psbt = PSBT.fromTX(tx, view);
+          psbt.inputs[0].nonWitnessUTXO = cb;
+          psbt.inputs[1].nonWitnessUTXO = cb2;
+          psbt.sign(ring);
+          psbt.finalize();
+          const finalTX = psbt.toTX();
+          finalTX.check(view);
+        });
+      }
     }
   });
 
