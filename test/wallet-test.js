@@ -1584,7 +1584,8 @@ describe('Wallet', function() {
 
     // 1. multisig payer 1 fills psbt.
     const fundOptions1 = {
-      bip32: false
+      bip32: false,
+      sign: true
     };
     await alice.fillPSBT(psbt, fundOptions1);
 
@@ -1600,7 +1601,8 @@ describe('Wallet', function() {
 
     // 2. solo payer fills psbt.
     const fundOptions2 = {
-      bip32: true
+      bip32: true,
+      sign: true
     };
     await carol.fillPSBT(psbt, fundOptions2);
     fundedInputs = psbt.inputs.filter(p => !p.nonWitnessUTXO.isNull());
@@ -1613,7 +1615,8 @@ describe('Wallet', function() {
 
     // 3. multisig payer 2 fills psbt independently from others.
     const fundOptions3 = {
-      bip32: true
+      bip32: true,
+      sign: true
     };
     await bob.fillPSBT(psbtBob, fundOptions3);
     const fundedOutputs = psbtBob.outputs.filter(o => o.keyInfo.size > 1);
