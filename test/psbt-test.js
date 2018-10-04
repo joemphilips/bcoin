@@ -19,15 +19,6 @@ const util = require('../lib/utils/util');
 const hash160 = require('bcrypto/lib/hash160');
 const assert = require('./util/assert');
 
-const WorkerPool = require('../lib/workers/workerpool');
-const Chain = require('../lib/blockchain/chain');
-
-const workers = new WorkerPool({ enabled: true });
-const chain = new Chain({
-  memory: true,
-  workers
-});
-
 function assertPSBTEqual(actual, expected) {
   assert.bufferEqual(
     actual.tx.hash(),
@@ -106,7 +97,7 @@ function assertFinalized(psbt, tx, witness) {
   } else {
     const actual = psbt.inputs[0].finalScriptSig;
     const expected = tx.inputs[0].script;
-    assert(actual.equals(expected))
+    assert(actual.equals(expected));
   }
 }
 
@@ -261,57 +252,35 @@ describe('Partially Signed Bitcoin Transaction', () => {
     });
   };
 
-  for (const numSign of [0, 1, 2]) {
-    for (const type of ['p2wsh', 'p2sh-p2wsh']) {
-      it(`can create from tx with ${numSign} signed ${type} input`, () => {
-        const [rings, , mtx] = templateTX(type, numSign, 2, 2);
+    for (const numSign of [0, 1, 2]) {
+      for (const type of ['p2wsh', 'p2sh-p2wsh']) {
+        it(`can create from tx with ${numSign} signed ${type} input`, () => {
+          const [rings, , mtx] = templateTX(type, numSign, 2, 2);
 
-        const [tx, view] = mtx.commit();
-        const psbt = PSBT.fromTX(tx, view);
+          const [tx, view] = mtx.commit();
+          const psbt = PSBT.fromTX(tx, view);
 
-        commonAssertion(psbt);
-        const wit = psbt.inputs[0].witness;
-        if (numSign === 0) {
-          assert(
-            wit.equals(rings[0].script),
-            'witness script for p2wsh must be copied to PSBTInput'
-          );
-        }
-        if (numSign === 1) {
-          const witExpected = tx.inputs[0].witness;
-          const [sigE] = witExpected.items
-            .filter(i => common.isSignatureEncoding(i));
-          const sig = psbt.inputs[0].signatures.get(rings[0].publicKey);
-          assert.bufferEqual(sig, sigE, 'must preserve signature');
-        }
-        if (numSign === 2)
-          assertFinalized(psbt, mtx, true);
-      });
-    }
-  }
-  });
-
-  /*
-  describe('Updater', () => {
-    before(async () => {
-      await chain.open();
-    });
-    after(async () => {
-      await chain.close();
-    });
-    for (const type of ['p2wsh', 'p2sh-p2wsh']) {
-      it(`should update for ${type}`, async () => {
-        const [ring, , mtx, cb] = templateTX(KeyRing.generate(), type, 0, 2, 2);
-        const tx = mtx.toTX();
-        const psbt = PSBT.fromTX(tx, new CoinView());
-        commonAssertion(psbt);
-        await chain.fillPSBT(psbt);
-        assert.strictEqual(psbt.inputs[0].redeem.code.length, 4);
-        assert(ring.script.equals(psbt.inputs[0].redeem));
-      });
+          commonAssertion(psbt);
+          const wit = psbt.inputs[0].witness;
+          if (numSign === 0) {
+            assert(
+              wit.equals(rings[0].script),
+              'witness script for p2wsh must be copied to PSBTInput'
+            );
+          }
+          if (numSign === 1) {
+            const witExpected = tx.inputs[0].witness;
+            const [sigE] = witExpected.items
+              .filter(i => common.isSignatureEncoding(i));
+            const sig = psbt.inputs[0].signatures.get(rings[0].publicKey);
+            assert.bufferEqual(sig, sigE, 'must preserve signature');
+          }
+          if (numSign === 2)
+            assertFinalized(psbt, mtx, true);
+        });
+      }
     }
   });
-  */
 
   describe('Signer', () => {
     const t = ['p2pkh', 'p2sh', 'p2wsh', 'p2wpkh','p2sh-p2wsh', 'p2sh-p2wpkh'];
