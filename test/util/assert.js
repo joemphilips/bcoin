@@ -108,6 +108,11 @@ assert.notBufferEqual = function notBufferEqual(actual, expected, message) {
   }
 };
 
+/**
+ * `valueCmp` is a function to compare equality of values for two bufferMap
+ * which defaults to `assert.bufferEqual` .
+ */
+
 assert.bufferMapEqual = function bufferMapEqual(actual, expected, valueCmp, message) {
   assert(actual instanceof BufferMap, '`actual` must be a BufferMap.');
   assert(expected instanceof BufferMap, '`expected` must be a BufferMap.');

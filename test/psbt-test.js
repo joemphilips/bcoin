@@ -507,7 +507,7 @@ describe('Partially Signed Bitcoin Transaction', () => {
     let combined = psbt1.combine(psbt2);
     assertPSBTEqual(combined, expected);
 
-    // even after (de)serialization
+    // Even after (de)serialization.
     expected = PSBT.fromRaw(expected.toRaw());
     combined = PSBT.fromRaw(combined.toRaw());
     assertPSBTEqual(combined, expected);
