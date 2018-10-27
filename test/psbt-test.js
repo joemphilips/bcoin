@@ -75,7 +75,7 @@ function assertPSBTEqual(actual, expected) {
     const a = actual.output[i];
     assert(e.redeem.equals(a.redeem), 'redeem must be same');
     assert(e.witness.equals(a.witness), 'witness must be same');
-    assert.bufferMapEqual(a.keyInfo, e.keyInfo);
+    assert.bufferMapEqual(a.keyInfo, e.keyInfo, compareKeyInfo);
     assert.bufferMapEqual(a.unknown, e.unknown);
   };
 }
@@ -503,8 +503,13 @@ describe('Partially Signed Bitcoin Transaction', () => {
   it('can combine psbt with unknown KV-Map correctly', () => {
     const psbt1 = PSBT.fromRaw(data.psbtUnknown1, 'base64');
     const psbt2 = PSBT.fromRaw(data.psbtUnknown2, 'base64');
-    const expected = PSBT.fromRaw(data.psbtUnknown3, 'base64');
-    const combined = psbt1.combine(psbt2);
+    let expected = PSBT.fromRaw(data.psbtUnknown3, 'base64');
+    let combined = psbt1.combine(psbt2);
+    assertPSBTEqual(combined, expected);
+
+    // even after (de)serialization
+    expected = PSBT.fromRaw(expected.toRaw());
+    combined = PSBT.fromRaw(combined.toRaw());
     assertPSBTEqual(combined, expected);
   });
 });
